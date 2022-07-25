@@ -1,0 +1,286 @@
+---
+title: "Detailed Analysis on Personal Transactions"
+author: "Haochong(Rogers) YANG"
+date: "13/07/2022"
+output: pdf_document
+---
+## INTRODUCTION
+
+Using data retrieved from Scotiabank, I've put together an analysis report for my transactions from August 21, 2021 to July 7, 2022. I used wrangling skills when processing the data and used several analyzing skills while looking at the patterns of data. This project not only gave me a chance to practice and learn more new R programming skills, but also helped me keep track of my financial condition. Thanks for your time:)
+
+First, let's get a quick glimpse into the data set converted from the csv file provided by Scotiabank.
+
+```{r setup, echo = FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggplot2)
+library(data.table)
+library(lubridate)
+library(dbplyr)
+library(stringr)
+```
+
+```{r, echo=FALSE, include=FALSE}
+transaction_raw_data <- read_csv("transactions_scotiabank.csv")
+```
+```{r, echo=FALSE}
+transaction_raw_data %>% glimpse()
+```
+
+
+
+
+## DATA PROCESSING
+
+After taking a glimpse into the raw data, we can find out that the raw data is missing the header, i.e. the titles for each columns, and there is also a meaningless column that only serves as the separator in the raw data.
+
+So first we should get rid of the column '-' and add a header to the data set.
+```{r, echo=FALSE}
+transaction <- data.frame(transaction_raw_data)
+
+colnames(transaction) <- c("Date", "Amount", "Separator", "Method", "Detail")
+
+transaction <- transaction %>% 
+  select("Date", "Amount", "Method", "Detail") %>% 
+  filter(Detail != "MB-TRANSFER")
+
+transaction %>% head()
+```
+
+Now we can see that the columns names were added and the useless column "-" is removed. To make it easier to examine, let's turn all the values in the data frame lowercase and reduce all the extra spaces. Then I format the date from "DD/MM/YYYY" into "YYYYMMDD" and rearranged date from least recent to most recent.
+
+```{r, echo=FALSE}
+transaction <- transaction %>% 
+  mutate(Method = tolower(Method), Detail = tolower(Detail))
+
+transaction$Detail <- str_squish(transaction$Detail)
+
+transaction$Date <- as.Date(transaction$Date, '%m/%d/%Y')
+
+transaction$Date <- format(transaction$Date, '%Y%m%d')
+
+transaction$Date <- as.character(transaction$Date)
+
+transaction <- transaction %>% arrange(Date)
+
+transaction$Date <- as.Date(as.character(transaction$Date), format="%Y%m%d")
+
+transaction %>% head()
+```
+
+Next is to filter out transactions via my credit card, since the payments were covered by my savings account on debit card.
+
+```{r, echo=FALSE}
+transaction <- dplyr::filter(transaction, !grepl("credit", Detail))
+```
+
+Now the data frame looks perfect! We can start analyzing the data! My first step is to categorize the transactions, namely into "transport", "food", "grocery", "e-transfer", "entertainment", "shopping", and "billing".
+
+```{r, echo=FALSE}
+transport_keyword <- "uber|uber.|trip|presto|bike"
+
+food_keyword <- "instacart|eats|*eats|food|kitchen|gyubee|pizza|mabu|starbucks|fry|tea|chipotle|hotpot|liuyishou|boku|gyu-kaku|katsuya|aroma|rice|yifang|pho|burger|taste|spaghetti|shi|xiang|time|bar|ramen|noodle|hotopia"
+
+grocery_keyword <- "shoppers|walmart|hmart|galleria|longo's|mart|super"
+
+interac_keyword <- "interac"
+
+entertainment_keyword <- "cineplex|sports|tuina|ticketmaster|wonderland|royal"
+
+shopping_keyword <- "nike|adidas|sephora|indigo|pandora|bestbuy|louis vuitton|www.razer.com|best|ssense|amzn|www.ikea.ca|holt|ikea|north|square|
+hunter|hollister"
+
+billing_keyword <- "ts-university|mto|draft|easy|rogers|hydro-electric"
+
+transaction[grep(transport_keyword, transaction$Detail, value = F), 
+            "Category"] <- "transport"
+
+transaction[grep(food_keyword, transaction$Detail, value = F),
+            "Category"] <- "food"
+
+transaction[grep(grocery_keyword, transaction$Detail, value = F),
+            "Category"] <- "grocery"
+
+transaction[grep(interac_keyword, transaction$Detail, value = F),
+            "Category"] <- "e-transfer"
+
+transaction[grep(entertainment_keyword, transaction$Detail, value = F),
+            "Category"] <- "entertainment"
+
+transaction[grep(shopping_keyword, transaction$Detail, value = F),
+            "Category"] <- "shopping"
+
+transaction[grep(billing_keyword, transaction$Detail, value = F),
+            "Category"] <- "billing"
+
+transaction[grep("banalogic", transaction$Detail, value = F),
+            "Category"] <- "salary"
+
+for (i in 1:nrow(transaction)){
+  if (is.na(transaction[i,]$Category)){
+    transaction[i,]$Category <- "other"
+  }
+}
+
+transaction %>% head()
+```
+## DATA ANALYSIS
+
+After sorting all the data with respect to the category, I summarized the total amount and total number of transactions in each category, which is shown in the following chart.
+
+```{r,echo=FALSE}
+sort_by_type <- transaction %>% 
+  group_by(Category) %>% 
+  summarize(Total_number = n(), Total_Amount = sum(Amount))
+
+sort_by_type %>% head(9)
+```
+Now let's sort all the transactions into months to see in which month I spent the most and in which I spent the least.
+
+```{r,echo=FALSE}
+sort_by_month <- transaction %>% 
+  group_by(Month = lubridate::floor_date(Date, "month")) %>% 
+  summarize(Monthly_Spending = sum(Amount)) %>% 
+  mutate(Year = format(Month, "%Y%m"), Month = format(Month, "%m"))
+
+sort_by_month <- sort_by_month[, c(3, 1, 2)]
+
+sort_by_month
+```
+From the monthly summary we can see that I spent the most in July 2022, because I transferred all my rent to my landlord. In March and June of 2022, I received significantly amount of money compared with my spending. This is because I received money for house renting from my dad and also received my salary from the company I'm currently doing my internship in. However, this chart is extremely misleading because the amount of rent is too large compared with my spending. So in order to get a better look at my spending pattern, I need to filter out my rent first.
+
+```{r, echo=FALSE, fig.height=2, fig.width=6, fig.align='center'}
+Monthly_Food_Spending <- transaction %>% 
+  filter(Category == "food") %>% 
+  group_by(Month = lubridate::floor_date(Date, "month")) %>% 
+  summarize(Monthly_Food = sum(Amount)) %>% 
+  mutate(Month = format(Month, "%Y%m"))
+
+Monthly_Food_Spending %>% 
+  ggplot(aes(x = Month, y = Monthly_Food)) + 
+  geom_bar(stat = "identity", fill = "#66B933") + 
+  labs(x = "Month", y = "Amount(in CAD)", title = "Monthly Spending on Food") +
+  theme(text = element_text(face = "bold", size = 8),
+        plot.title.position = "panel",
+        plot.title = element_text(hjust = 0.5, size = 10), 
+        axis.title.x = element_text(hjust = 0.5, size = 8),
+        axis.text.x = element_text(size = 8)) + 
+  scale_y_reverse()
+```
+As can be seen from the graph, the distribution of my spending on food is bimodal, with two peaks at September 2021 and June 2022, which are two months that burden on school work is not heavy. But there are two exceptions, including January and March of 2022. I spent a lot on food in January 2022 because it was the time my first semester in university ended, so I spent more money beyond my budget. I also spent money "abnormally" in March 2022, which is because I brought my best friend who came to Toronto to visit me to some fancy restaurants, so I spent the most monthly speaking.
+
+```{r,echo=FALSE, fig.height=2, fig.width=6, fig.align='center'}
+Monthly_Transport_Spending <- transaction %>% 
+  filter(Category == "transport") %>% 
+  group_by(Month = lubridate::floor_date(Date, "month")) %>% 
+  summarize(Monthly_Transport = sum(Amount)) %>% 
+  mutate(Month = format(Month, "%Y%m"))
+
+Monthly_Transport_Spending %>% 
+  ggplot(aes(x = Month, y = Monthly_Transport)) + 
+  geom_bar(stat = "identity", fill = "#66B933") + 
+  labs(x = "Month", y = "Amount(in CAD)", 
+       title = "Monthly Spending on Transportation") +
+  theme(text = element_text(face = "bold", size = 8),
+        plot.title.position = "panel",
+        plot.title = element_text(hjust = 0.5, size = 10), 
+        axis.title.x = element_text(hjust = 0.5, size = 8),
+        axis.text.x = element_text(size = 8)) + 
+  scale_y_reverse()
+```
+My monthly spending on transportation varied throughout the year. I spent average about 350 dollars per month on transportation from August 2021 to October 2021, because that was the time I'm exploring Toronto. As approaching to midterms and finals, I don't have enough time to go out, so my spending on transportation dropped accordingly. Later as I got used to the balance between study and living, I have time to go out more often so my spending on transportation gradually increased in the second semester, which is from February 2022 to May 2022.
+
+Looking at the proportions of my daily spending is also important, since I can know my expenditure structure.
+
+```{r, echo=FALSE, fig.height=4, fig.width=6, fig.align='center'}
+labels <- c("billing", "e-transfer", "entertainment", "food", 
+            "grocery",  "shopping", "transportation")
+
+daily_transactions <- sort_by_type %>% 
+  filter(Category != "salary" & Category != "other")
+
+type_trans <- round(100 * abs(daily_transactions$Total_Amount) 
+                    / sum(abs(daily_transactions$Total_Amount)
+                          ), 1)
+
+proportion_pie_chart <- pie(abs(daily_transactions$Total_Amount),
+  labels = paste(type_trans, "%") , main = "Proportion of Daily Spending", 
+  col = rainbow(length(type_trans)))
+legend("topright", labels, cex = 0.7,
+   fill = rainbow(length(type_trans)))
+```
+From the pie chart above I can directly tell that the largest portion of my transaction is on "billing", which included my rent, hydro, and internet fees. Billing took approximately 29% of my overall transaction. The smallest portion is entertainment, which only took about 3.8% of my total amount of transaction. This is because I barely go to play or relax after school started. The surprising part is the transportation. I actually spent more money on transit than grocery. This might because I took a lot of Uber trips in the city before I got used to the public transportation system in Toronto. 
+
+Next, I want to take a look at my shopping transactions. 
+```{r, echo=FALSE}
+shopping_summary <- transaction %>% 
+  filter(Category == "shopping") %>% 
+  summarize(Number_of_Transaction = format(round(n(), 0), nsmall = 0), 
+          Total_Shopping_Amount = format(round(sum(Amount), 2), nsmall = 2), 
+          Mean_Shopping_Amount = format(round(mean(Amount), 2), nsmall = 2), 
+          Median_Shopping_Amount = format(round(median(Amount), 2), nsmall = 2), 
+          Largest_Transaction = format(round(min(Amount), 2), nsmall = 2))
+
+shopping_summary <- as.data.frame(t(shopping_summary))
+
+colnames(shopping_summary) <- "Amount(in CAD)"
+
+shopping_summary
+```
+
+In the summary table we can see that I've made 34 transactions in shopping. The total amount of shopping transaction is 4704.5 CAD and the largest transaction is 1000 CAD (because it is my debit card daily limit). The average amount in each transaction is 138.37 CAD, and the median amount is 51.69 CAD.
+
+```{r, echo=FALSE, fig.height=2, fig.width=6, fig.align='center'}
+transaction %>% filter(Category == "shopping" | 
+                       Category == "transport" | 
+                       Category == "entertainment" | Category == "food") %>% 
+  ggplot(aes(x = Category, y = abs(Amount))) + geom_boxplot(fill = "#66B933") + labs(x = "Category", y = "Amount", title = "Shopping, Transport, and Entertainment Detail") + 
+  theme(text = element_text(face = "bold", size = 8),
+        plot.title.position = "panel",
+        plot.title = element_text(hjust = 0.5, size = 10), 
+        axis.title.x = element_text(hjust = 0.5, size = 8),
+        axis.text.x = element_text(size = 8)) + 
+  coord_flip()
+```
+From the box plot above I can see that three types of transactions are all right-skewed. This shows that most of the transactions are relative small, concentrating on the interval of amount less than 100 CAD per transaction. 
+
+Now let's find out which specific kind of transaction I have made the most in the past year. As we can see from the following chart, the most transfer I've made is e-transfer to my friends, which might be caused by spliting the bill or other kind of cases. The second most number of transfer is Uber trip and the third is Uber eats. This fall within my expectation because these spendings are really common in my daily life.
+
+```{r, echo=FALSE}
+transaction %>% group_by(Detail) %>% summarize(number_of_transaction = n()) %>% arrange(desc(number_of_transaction)) %>% head(10)
+```
+What if I extend my exploration from the existing data to predicted data? This is how it does. I want to predict what range will my next transaction's price fell in, so I've made 10000 stimulations based on the existing data. The result is shown as follows:
+
+```{r, echo=FALSE}
+set.seed(666)
+repetitions <- 10000
+boot_result <- rep(NA, repetitions)
+
+for (i in 1:repetitions){
+  bootstrap_data <- transaction %>% filter(Category == "food")
+  boot_sample <- bootstrap_data %>% sample_n(size = nrow(bootstrap_data), replace = TRUE) %>% select(Amount, Detail)
+  boot_result[i] <- boot_sample %>% 
+    summarize(mean_amount = mean(Amount)) %>% as.numeric()
+}
+
+boot_tbl <- tibble(mean = boot_result)
+conf_int <- quantile(boot_tbl$mean,c(0.05, 0.95))
+
+conf_int <- as.data.frame(conf_int)
+
+colnames(conf_int) <- "Amount(in CAD)"
+
+conf_int
+
+```
+The 5th percentile among all the 10000 values generated in the stimulation is -39.07, which is the largest value that is smaller or equal to 5% of all values. Similarly, the 95th percentile is -25.27. 
+
+So, the 90% confidence interval is from -39.07 stars to -25.27 stars on average. If I repeated this sampling procedure many times, 90% of the confidence intervals would include the true mean amount for the next transaction.
+
+Can say: I am 90% confident that the mean amount for my next transaction based on my transaction history is between 39.07 CAD to 25.27, which is an interval of amount for a regular dinner in the restaurant.
+
+## Conclusion
+
+The transactions in shopping appeared in my payment history varied much more than other category, which suggests that I should pay more attention on shopping, trying to avoid impolsive purchases on shopping. The transaction amount varied a lot between months in school and months in school breaks, which suggests that I should keep my purchasing habit during school time the same, and maybe try to control myself buying more stuff when school ends. These suggestions I concluded from my analysis on the transaction history will help me improve my daily spending pattern and hence help me control myself financially.
+
